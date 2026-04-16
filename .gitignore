@@ -1,1 +1,14 @@
 .worktrees/
+.env
+.venv/
+.cache/
+.claude/
+.codex
+.omc/
+.pytest_cache/
+__pycache__/
+.python-version
+FinComYY.txt
+FinFutYY.txt
+c_year.txt
+f_year.txt

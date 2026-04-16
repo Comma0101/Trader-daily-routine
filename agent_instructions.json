@@ -1,0 +1,58 @@
+{
+  "name": "Trader Daily Routine Agent Instructions",
+  "entrypoint": "uv run python main.py",
+  "working_directory": "/home/comma/Documents/Trader-daily-routine",
+  "recommended_profile": "daily_note",
+  "profiles": {
+    "daily_note": {
+      "description": "Live markdown summary for agents and daily sharing",
+      "command_markdown": "uv run python main.py --profile daily_note",
+      "command_json": "uv run python main.py --profile daily_note --output json",
+      "command_json_with_flow": "uv run python main.py --profile daily_note --output json --assumed-cta-aum 100000000000",
+      "defaults": {
+        "quick": true,
+        "live": true,
+        "refresh": true,
+        "summary_only": true,
+        "summary_format": "markdown",
+        "llm_summary": true
+      }
+    }
+  },
+  "output_modes": {
+    "markdown": {
+      "description": "Shareable human-readable summary",
+      "command": "uv run python main.py --profile daily_note"
+    },
+    "json": {
+      "description": "Machine-readable payload with summary text, summary facts, report context, portfolio, proxy flow, capital state, flips, and validation",
+      "command": "uv run python main.py --profile daily_note --output json"
+    },
+    "json_with_flow": {
+      "description": "Machine-readable payload with proxy flow estimates using an explicit CTA AUM assumption",
+      "command": "uv run python main.py --profile daily_note --output json --assumed-cta-aum 100000000000"
+    }
+  },
+  "environment": {
+    "auto_loaded_repo_env_file": ".env",
+    "optional_keys": [
+      "GEMINI_API_KEY",
+      "GEMINI_MODEL",
+      "GEMINI_FALLBACK_MODEL"
+    ],
+    "notes": [
+      "llm.py reads GEMINI_API_KEY, GEMINI_MODEL, and GEMINI_FALLBACK_MODEL from process env first, then from the repo root .env file",
+      "the markdown note path retries malformed primary Gemini output with the configured fallback model before using deterministic summaries",
+      "if Gemini fails or returns malformed markdown, the CLI falls back to deterministic summaries"
+    ]
+  },
+  "agent_guidance": [
+    "Run commands from the repo root",
+    "Use the daily_note profile unless you explicitly need a different mode",
+    "Use --output json for machine-readable ingestion",
+    "Use --assumed-cta-aum when you want estimated CTA proxy dollar and contract flow in the JSON payload",
+    "capital_estimate is always present in JSON output and is labeled as deployed risk and remaining headroom, not cash spent",
+    "Use --profile daily_note without --output json when you need a shareable markdown note",
+    "Use explicit flags instead of the profile only when you need to override the defaults"
+  ]
+}
