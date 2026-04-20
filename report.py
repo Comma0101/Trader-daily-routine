@@ -487,6 +487,118 @@ def print_capital_state(capital_estimate=None):
     print()
 
 
+def print_tactical_equity_flow(tactical_equity=None):
+    """Print the tactical ES/NQ scenario sleeve."""
+    if not tactical_equity or not tactical_equity.get("available"):
+        return
+
+    print("  TACTICAL EQUITY CTA SCENARIOS")
+    print("  " + "-" * 52)
+    if tactical_equity.get("assumed_cta_aum_usd") is not None:
+        print(f"  CTA AUM assumption: {_format_usd(tactical_equity.get('assumed_cta_aum_usd'))}")
+    if tactical_equity.get("method_note"):
+        print(f"  {tactical_equity['method_note']}")
+
+    market_rows = []
+    for sym, market in sorted(tactical_equity.get("markets", {}).items()):
+        horizon_text = ", ".join(
+            f"{label}:{int(val):+d}" for label, val in market.get("horizon_signals", {}).items()
+        )
+        market_rows.append([
+            sym,
+            market.get("signal_label"),
+            f"{float(market.get('target_weight', 0.0)):+.4f}",
+            market.get("nearest_horizon") or "N/A",
+            _format_pct(market.get("nearest_distance_pct") / 100.0) if market.get("nearest_distance_pct") is not None else "N/A",
+            horizon_text or "N/A",
+        ])
+
+    if market_rows:
+        print(tabulate(
+            market_rows,
+            headers=["Sym", "Dir", "Weight", "Nearest MA", "Dist", "Horizons"],
+            tablefmt="simple",
+        ))
+
+    scenario_rows = []
+    for scenario in tactical_equity.get("scenarios", []):
+        scenario_rows.append([
+            scenario.get("label"),
+            _format_pct(scenario.get("total_delta_weight")),
+            _format_usd(scenario.get("total_estimated_notional_change_usd")),
+        ])
+
+    if scenario_rows:
+        print()
+        print(tabulate(
+            scenario_rows,
+            headers=["Tape", "dW", "dNotional"],
+            tablefmt="simple",
+        ))
+    print()
+
+
+def print_goldman_benchmark(goldman_benchmark=None):
+    """Print compact public Goldman benchmark summary."""
+    if not goldman_benchmark or not goldman_benchmark.get("available"):
+        return
+
+    print("  GOLDMAN BENCHMARK")
+    print("  " + "-" * 52)
+    headline = goldman_benchmark.get("headline")
+    if headline:
+        print(f"  {headline}")
+
+    rows = []
+    for note in goldman_benchmark.get("notes", [])[:5]:
+        pos = note.get("position_comparison") or {}
+        rows.append([
+            note.get("published_date"),
+            note.get("reference_symbol") or "N/A",
+            "Y" if pos.get("agrees") else ("N" if pos.get("agrees") is False else "N/A"),
+            len([x for x in note.get("scenario_comparisons", []) if x.get("comparable")]),
+            "Y" if note.get("threshold_comparison") else "N",
+        ])
+    if rows:
+        print(tabulate(
+            rows,
+            headers=["Date", "Sym", "Pos", "Scen", "Thr"],
+            tablefmt="simple",
+        ))
+    print()
+
+
+def print_goldman_calibration(goldman_calibration=None):
+    """Print coarse Goldman-fit calibration results."""
+    if not goldman_calibration or not goldman_calibration.get("available"):
+        return
+
+    print("  GOLDMAN CALIBRATION")
+    print("  " + "-" * 52)
+    if goldman_calibration.get("headline"):
+        print(f"  {goldman_calibration['headline']}")
+    if goldman_calibration.get("recommendation"):
+        print(f"  {goldman_calibration['recommendation']}")
+
+    rows = []
+    for candidate in goldman_calibration.get("top_candidates", [])[:3]:
+        rows.append([
+            candidate.get("label"),
+            f"{float(candidate.get('objective_score', 0.0)):.1f}",
+            _format_pct((candidate.get("position_direction_agreement_rate") or 0.0)),
+            _format_pct((candidate.get("scenario_direction_agreement_rate") or 0.0)),
+            f"{float(candidate.get('scenario_mean_abs_error_pct', 0.0) or 0.0):.0f}%",
+            f"{float(candidate.get('threshold_mean_abs_gap_pct', 0.0) or 0.0):.2f}%",
+        ])
+    if rows:
+        print(tabulate(
+            rows,
+            headers=["Label", "Score", "Pos", "Scen", "Err", "ThrGap"],
+            tablefmt="simple",
+        ))
+    print()
+
+
 def print_data_context(report_context=None):
     """Print whether the report is using official daily closes or a live nowcast."""
     if not report_context:
@@ -516,6 +628,9 @@ def print_full_report(
     report_context=None,
     flow_estimate=None,
     capital_estimate=None,
+    tactical_equity=None,
+    goldman_benchmark=None,
+    goldman_calibration=None,
     etf_returns_df=None,
     signal_validation=None,
     position_validation=None,
@@ -541,6 +656,9 @@ def print_full_report(
     print_crowding(portfolio_result, universe, trend_model, crowding_facts=crowding_facts)
     print_reversal_levels(portfolio_result, universe)
     print_flow_summary(flow_estimate=flow_estimate)
+    print_tactical_equity_flow(tactical_equity=tactical_equity)
+    print_goldman_benchmark(goldman_benchmark=goldman_benchmark)
+    print_goldman_calibration(goldman_calibration=goldman_calibration)
     print_capital_state(capital_estimate=capital_estimate)
     print_validation_summary(
         signal_validation=signal_validation,

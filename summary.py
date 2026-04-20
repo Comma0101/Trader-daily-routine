@@ -24,6 +24,9 @@ def build_summary_facts(
     as_of=None,
     data_context=None,
     historical_crowding_ratios=None,
+    tactical_equity=None,
+    goldman_benchmark=None,
+    goldman_calibration=None,
 ):
     details = portfolio_result.get("signal_details", {})
     selected_symbols = _selected_symbols(portfolio_result)
@@ -63,6 +66,9 @@ def build_summary_facts(
         "data_context": dict(data_context or {}),
         "flow": _flow_snapshot(flow_estimate),
         "capital": _capital_snapshot(capital_estimate),
+        "tactical_equity": _tactical_equity_snapshot(tactical_equity),
+        "goldman_benchmark": _goldman_benchmark_snapshot(goldman_benchmark),
+        "goldman_calibration": _goldman_calibration_snapshot(goldman_calibration),
     }
 
     benchmark_snapshot = _benchmark_etf_snapshot(etf_returns_df, as_of=as_of)
@@ -426,6 +432,8 @@ def _flow_snapshot(flow_estimate):
         "top_notional_decrease_5d": [],
         "sector_flows_1d": {},
         "sector_flows_5d": {},
+        "aggregate_decomposition_1d": None,
+        "aggregate_decomposition_5d": None,
     }
     if not flow_estimate:
         return snapshot
@@ -455,6 +463,62 @@ def _capital_snapshot(capital_estimate):
 
     merged = dict(snapshot)
     merged.update(dict(capital_estimate))
+    return merged
+
+
+def _tactical_equity_snapshot(tactical_equity):
+    snapshot = {
+        "available": False,
+        "markets": {},
+        "scenarios": [],
+        "scenario_reference": {},
+        "assumed_cta_aum_usd": None,
+        "model_label": None,
+        "method_note": None,
+    }
+    if not tactical_equity:
+        return snapshot
+
+    merged = dict(snapshot)
+    merged.update(dict(tactical_equity))
+    return merged
+
+
+def _goldman_benchmark_snapshot(goldman_benchmark):
+    snapshot = {
+        "available": False,
+        "notes": [],
+        "headline": None,
+        "notes_evaluated": 0,
+        "position_direction_agreement_rate": None,
+        "scenario_direction_agreement_rate": None,
+        "threshold_mean_abs_gap_pct": None,
+        "scenario_mean_abs_error_usd": None,
+        "scenario_mean_abs_error_pct": None,
+    }
+    if not goldman_benchmark:
+        return snapshot
+
+    merged = dict(snapshot)
+    merged.update(dict(goldman_benchmark))
+    return merged
+
+
+def _goldman_calibration_snapshot(goldman_calibration):
+    snapshot = {
+        "available": False,
+        "headline": None,
+        "recommendation": None,
+        "objective_improvement_pct": None,
+        "baseline": None,
+        "best": None,
+        "top_candidates": [],
+    }
+    if not goldman_calibration:
+        return snapshot
+
+    merged = dict(snapshot)
+    merged.update(dict(goldman_calibration))
     return merged
 
 
@@ -497,6 +561,8 @@ def _investment_overview_snapshot(facts):
         "net_deployed_usd": capital.get("estimated_net_risk_deployed_usd"),
         "remaining_headroom_pct": capital.get("remaining_gross_headroom_pct_of_aum"),
         "remaining_headroom_usd": capital.get("estimated_remaining_gross_headroom_usd"),
+        "aggregate_decomposition_1d": flow.get("aggregate_decomposition_1d"),
+        "aggregate_decomposition_5d": flow.get("aggregate_decomposition_5d"),
     }
 
     # Build all_market_flows from flow markets merged with conviction data
@@ -519,6 +585,8 @@ def _investment_overview_snapshot(facts):
             "estimated_notional_change_usd_1d": fm.get("estimated_notional_change_usd_1d"),
             "estimated_notional_change_usd_5d": fm.get("estimated_notional_change_usd_5d"),
             "estimated_contract_equivalent_5d": fm.get("estimated_contract_equivalent_5d"),
+            "decomposition_1d": fm.get("decomposition_1d"),
+            "decomposition_5d": fm.get("decomposition_5d"),
         })
 
     overview["all_market_flows"] = all_market_flows
@@ -566,6 +634,7 @@ def _data_used_snapshot(facts):
 def _calculation_method_snapshot(facts):
     flow = facts.get("flow", {})
     capital = facts.get("capital", {})
+    tactical = facts.get("tactical_equity", {})
     if flow.get("assumed_cta_aum_usd") is None:
         flow_text = (
             "Modeled notional change uses current target weight minus the prior 1-day "
@@ -578,6 +647,24 @@ def _calculation_method_snapshot(facts):
             "5-trading-day model weights. Dollar and contract estimates use the supplied CTA AUM "
             "assumption, latest price, and contract multiplier."
         )
+
+    if flow.get("aggregate_decomposition_1d") or flow.get("aggregate_decomposition_5d"):
+        flow_text += (
+            " Driver decomposition splits each modeled change into signal, vol-target, "
+            "allocation-budget, and leverage-cap effects."
+        )
+
+    if tactical.get("available"):
+        flow_text += (
+            " A separate tactical equity sleeve runs multi-horizon ES/NQ scenarios for flat, "
+            "up, and down tape analysis."
+        )
+    benchmark = facts.get("goldman_benchmark", {})
+    if benchmark.get("available"):
+        flow_text += " Public Goldman CTA note snapshots are used as a calibration benchmark."
+    calibration = facts.get("goldman_calibration", {})
+    if calibration.get("available"):
+        flow_text += " A coarse parameter search is run against those note snapshots to test whether the tactical sleeve is converging toward Goldman-style outputs."
 
     return {
         "signals": (
@@ -594,7 +681,16 @@ def _calculation_method_snapshot(facts):
 
 def _conclusion_snapshot(facts):
     details = []
-    for helper in (_convictions_line, _flip_risk_line, _flow_conclusion_line, _caveat_line):
+    for helper in (
+        _convictions_line,
+        _flip_risk_line,
+        _flow_conclusion_line,
+        _flow_decomposition_line,
+        _tactical_equity_line,
+        _goldman_benchmark_line,
+        _goldman_calibration_line,
+        _caveat_line,
+    ):
         line = helper(facts)
         if line:
             details.append(line)
@@ -633,10 +729,24 @@ def _suggestions_snapshot(facts):
             suggestions.append(caveat)
 
     flow = facts.get("flow", {})
+    decomp_5d = flow.get("aggregate_decomposition_5d") or {}
+    counts = decomp_5d.get("flow_type_counts", {})
+    if counts:
+        rebalance_only = int(counts.get("rebalance", 0) or 0)
+        signal_driven = sum(int(v or 0) for k, v in counts.items() if k != "rebalance")
+        if rebalance_only > 0 and signal_driven == 0:
+            suggestions.append("Treat the current flow pulse as rebalance-driven rather than a fresh regime flip.")
+        elif signal_driven > rebalance_only:
+            suggestions.append("Focus on the signal-driven sleeve first because model flow is coming more from regime change than resizing.")
+
     if flow.get("assumed_cta_aum_usd") is not None:
         suggestions.append("Adjust the CTA AUM assumption if you want a more conservative or more aggressive crowd-level notional estimate.")
     elif flow.get("top_notional_increase_1d") or flow.get("top_notional_decrease_1d") or flow.get("markets"):
         suggestions.append("Add --assumed-cta-aum to convert relative weight changes into estimated dollar and contract notional.")
+
+    calibration = facts.get("goldman_calibration", {})
+    if calibration.get("available") and calibration.get("recommendation"):
+        suggestions.append(calibration["recommendation"])
 
     if not suggestions:
         suggestions.append("Review the full report for sector concentration and validation context.")
@@ -657,6 +767,11 @@ def _drivers_snapshot(facts):
         "nearest_flip_risks": facts.get("nearest_flip_risks", [])[:3],
         "top_notional_increase_5d": facts.get("flow", {}).get("top_notional_increase_5d", [])[:3],
         "top_notional_decrease_5d": facts.get("flow", {}).get("top_notional_decrease_5d", [])[:3],
+        "aggregate_decomposition_1d": facts.get("flow", {}).get("aggregate_decomposition_1d"),
+        "aggregate_decomposition_5d": facts.get("flow", {}).get("aggregate_decomposition_5d"),
+        "tactical_equity": facts.get("tactical_equity"),
+        "goldman_benchmark": facts.get("goldman_benchmark"),
+        "goldman_calibration": facts.get("goldman_calibration"),
     }
 
 
@@ -1039,6 +1154,92 @@ def _flow_conclusion_line(facts):
     if not fragments:
         return None
     return " ".join(fragments)
+
+
+def _flow_decomposition_line(facts):
+    flow = facts.get("flow", {})
+    decomp = flow.get("aggregate_decomposition_5d")
+    if not decomp:
+        return None
+
+    counts = decomp.get("flow_type_counts", {})
+    signal_driven = sum(
+        v for k, v in counts.items() if k != "rebalance"
+    )
+    rebalance_only = counts.get("rebalance", 0)
+
+    parts = []
+
+    # Prefer USD if available, otherwise use weight.
+    sig_usd = decomp.get("signal_effect_usd")
+    vol_usd = decomp.get("vol_target_effect_usd")
+    alloc_usd = decomp.get("allocation_effect_usd")
+    cap_usd = decomp.get("leverage_cap_effect_usd")
+    if all(value is not None for value in (sig_usd, vol_usd, alloc_usd, cap_usd)):
+        parts.append(f"5D driver split: signal {_format_usd(sig_usd)}")
+        parts.append(f"vol-target {_format_usd(vol_usd)}")
+        parts.append(f"allocation {_format_usd(alloc_usd)}")
+        parts.append(f"cap {_format_usd(cap_usd)}")
+    else:
+        sig_w = decomp.get("signal_effect_weight", 0)
+        vol_w = decomp.get("vol_target_effect_weight", 0)
+        alloc_w = decomp.get("allocation_effect_weight", 0)
+        cap_w = decomp.get("leverage_cap_effect_weight", 0)
+        parts.append(f"5D driver split: signal {sig_w:+.4f}")
+        parts.append(f"vol-target {vol_w:+.4f}")
+        parts.append(f"allocation {alloc_w:+.4f}")
+        parts.append(f"cap {cap_w:+.4f}")
+
+    parts.append(
+        f"({signal_driven} signal-driven, {rebalance_only} rebalance-only)"
+    )
+    return " | ".join(parts) + "."
+
+
+def _tactical_equity_line(facts):
+    tactical = facts.get("tactical_equity", {})
+    if not tactical.get("available"):
+        return None
+
+    scenarios = tactical.get("scenario_reference", {})
+    flat = scenarios.get("flat")
+    down = scenarios.get("down_2pct")
+    up = scenarios.get("up_2pct")
+    if not flat and not down and not up:
+        return None
+
+    parts = []
+    if flat is not None:
+        parts.append(
+            f"flat tape {_format_usd(flat.get('total_estimated_notional_change_usd')) if flat.get('total_estimated_notional_change_usd') is not None else _format_pct(flat.get('total_delta_weight'))}"
+        )
+    if up is not None:
+        parts.append(
+            f"+2% tape {_format_usd(up.get('total_estimated_notional_change_usd')) if up.get('total_estimated_notional_change_usd') is not None else _format_pct(up.get('total_delta_weight'))}"
+        )
+    if down is not None:
+        parts.append(
+            f"-2% tape {_format_usd(down.get('total_estimated_notional_change_usd')) if down.get('total_estimated_notional_change_usd') is not None else _format_pct(down.get('total_delta_weight'))}"
+        )
+    if not parts:
+        return None
+    return "Tactical ES/NQ sleeve: " + " | ".join(parts) + "."
+
+
+def _goldman_benchmark_line(facts):
+    benchmark = facts.get("goldman_benchmark", {})
+    headline = benchmark.get("headline")
+    if not benchmark.get("available") or not headline:
+        return None
+    return headline + "."
+
+
+def _goldman_calibration_line(facts):
+    calibration = facts.get("goldman_calibration", {})
+    headline = calibration.get("headline")
+    if not calibration.get("available") or not headline:
+        return None
+    return headline + "."
 
 
 def _selected_market_count(facts):

@@ -193,6 +193,164 @@ class ReportSummaryIntegrationTests(unittest.TestCase):
         self.assertIn("$95.00B", rendered)
         self.assertIn("risk deployed, not cash spent", rendered)
 
+    def test_full_report_prints_tactical_equity_section_when_available(self):
+        portfolio_result = {
+            "signal_details": {
+                "ES": {
+                    "signal": 1.0,
+                    "signal_short": 1.0,
+                    "signal_long": 1.0,
+                    "price": 100.0,
+                    "days_in_position": 3,
+                    "reversal_price_short": 99.0,
+                    "reversal_price_long": 98.0,
+                }
+            },
+            "weights": {"ES": 0.25},
+            "vol_scalars": {"ES": 1.0},
+            "sector_exposure": {"Equity Index": 0.25},
+            "gross_leverage": 0.25,
+            "net_exposure": 0.25,
+        }
+        universe = {"ES": {"name": "S&P 500", "sector": "Equity Index"}}
+        trend_model = mock.Mock()
+        trend_model.signal_label.return_value = "LONG"
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_full_report(
+                portfolio_result=portfolio_result,
+                universe=universe,
+                trend_model=trend_model,
+                flips_by_market={"ES": []},
+                tactical_equity={
+                    "available": True,
+                    "assumed_cta_aum_usd": 100_000_000_000.0,
+                    "method_note": "Tactical multi-horizon sleeve.",
+                    "markets": {
+                        "ES": {
+                            "signal_label": "LONG",
+                            "target_weight": 0.70,
+                            "nearest_horizon": "20d",
+                            "nearest_distance_pct": 1.2,
+                            "horizon_signals": {"20d": 1.0, "60d": 1.0},
+                        }
+                    },
+                    "scenarios": [
+                        {"label": "flat", "total_delta_weight": 0.0, "total_estimated_notional_change_usd": 0.0},
+                        {"label": "+2%", "total_delta_weight": 0.02, "total_estimated_notional_change_usd": 2_000_000_000.0},
+                    ],
+                },
+            )
+
+        rendered = output.getvalue()
+        self.assertIn("TACTICAL EQUITY CTA SCENARIOS", rendered)
+        self.assertIn("Tactical multi-horizon sleeve.", rendered)
+        self.assertIn("+2%", rendered)
+        self.assertIn("$2.00B", rendered)
+
+    def test_full_report_prints_goldman_benchmark_section_when_available(self):
+        portfolio_result = {
+            "signal_details": {
+                "ES": {
+                    "signal": 1.0,
+                    "signal_short": 1.0,
+                    "signal_long": 1.0,
+                    "price": 100.0,
+                    "days_in_position": 3,
+                    "reversal_price_short": 99.0,
+                    "reversal_price_long": 98.0,
+                }
+            },
+            "weights": {"ES": 0.25},
+            "vol_scalars": {"ES": 1.0},
+            "sector_exposure": {"Equity Index": 0.25},
+            "gross_leverage": 0.25,
+            "net_exposure": 0.25,
+        }
+        universe = {"ES": {"name": "S&P 500", "sector": "Equity Index"}}
+        trend_model = mock.Mock()
+        trend_model.signal_label.return_value = "LONG"
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_full_report(
+                portfolio_result=portfolio_result,
+                universe=universe,
+                trend_model=trend_model,
+                flips_by_market={"ES": []},
+                goldman_benchmark={
+                    "available": True,
+                    "headline": "Goldman benchmark coverage: 3 public notes | position agreement 67%",
+                    "notes": [
+                        {
+                            "published_date": "2026-04-09",
+                            "reference_symbol": "ES",
+                            "position_comparison": {"agrees": True},
+                            "scenario_comparisons": [{"comparable": True}],
+                            "threshold_comparison": {"short_term": {}},
+                        }
+                    ],
+                },
+            )
+
+        rendered = output.getvalue()
+        self.assertIn("GOLDMAN BENCHMARK", rendered)
+        self.assertIn("position agreement 67%", rendered)
+        self.assertIn("2026-04-09", rendered)
+
+    def test_full_report_prints_goldman_calibration_section_when_available(self):
+        portfolio_result = {
+            "signal_details": {
+                "ES": {
+                    "signal": 1.0,
+                    "signal_short": 1.0,
+                    "signal_long": 1.0,
+                    "price": 100.0,
+                    "days_in_position": 3,
+                    "reversal_price_short": 99.0,
+                    "reversal_price_long": 98.0,
+                }
+            },
+            "weights": {"ES": 0.25},
+            "vol_scalars": {"ES": 1.0},
+            "sector_exposure": {"Equity Index": 0.25},
+            "gross_leverage": 0.25,
+            "net_exposure": 0.25,
+        }
+        universe = {"ES": {"name": "S&P 500", "sector": "Equity Index"}}
+        trend_model = mock.Mock()
+        trend_model.signal_label.return_value = "LONG"
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_full_report(
+                portfolio_result=portfolio_result,
+                universe=universe,
+                trend_model=trend_model,
+                flips_by_market={"ES": []},
+                goldman_calibration={
+                    "available": True,
+                    "headline": "Goldman calibration best fit: fast | score 55.0 | +18% vs baseline",
+                    "recommendation": "Calibration materially improved fit, but magnitude error is still too wide for dealer-desk quality.",
+                    "top_candidates": [
+                        {
+                            "label": "fast",
+                            "objective_score": 55.0,
+                            "position_direction_agreement_rate": 1.0,
+                            "scenario_direction_agreement_rate": 1.0,
+                            "scenario_mean_abs_error_pct": 62.0,
+                            "threshold_mean_abs_gap_pct": 1.5,
+                        }
+                    ],
+                },
+            )
+
+        rendered = output.getvalue()
+        self.assertIn("GOLDMAN CALIBRATION", rendered)
+        self.assertIn("best fit: fast", rendered)
+        self.assertIn("dealer-desk quality", rendered)
+
 
 class MainSummaryCliTests(unittest.TestCase):
     def _configure_main_dependencies(self):
@@ -234,6 +392,28 @@ class MainSummaryCliTests(unittest.TestCase):
             [0.01],
             index=pd.to_datetime(["2026-04-15"]),
         )
+        portfolio_constructor.historical_components.return_value = {
+            "weights": pd.DataFrame(
+                {"ES": [0.20, 0.22]},
+                index=pd.to_datetime(["2026-04-14", "2026-04-15"]),
+            ),
+            "signals": pd.DataFrame(
+                {"ES": [1.0, 1.0]},
+                index=pd.to_datetime(["2026-04-14", "2026-04-15"]),
+            ),
+            "vol_scalars": pd.DataFrame(
+                {"ES": [1.0, 1.0]},
+                index=pd.to_datetime(["2026-04-14", "2026-04-15"]),
+            ),
+            "alloc_budgets": pd.DataFrame(
+                {"ES": [0.25, 0.25]},
+                index=pd.to_datetime(["2026-04-14", "2026-04-15"]),
+            ),
+            "cap_factors": pd.Series(
+                [1.0, 1.0],
+                index=pd.to_datetime(["2026-04-14", "2026-04-15"]),
+            ),
+        }
 
         benchmark_data = mock.Mock()
         benchmark_data.etf_returns.return_value = pd.DataFrame(
@@ -391,10 +571,6 @@ class MainSummaryCliTests(unittest.TestCase):
 
     def test_main_json_output_includes_flow_estimate_when_assumed_cta_aum_is_provided(self):
         deps = self._configure_main_dependencies()
-        deps["portfolio_constructor"].historical_weights.return_value = pd.DataFrame(
-            {"ES": [0.20, 0.22]},
-            index=pd.to_datetime(["2026-04-14", "2026-04-15"]),
-        )
 
         output = io.StringIO()
         errors = io.StringIO()

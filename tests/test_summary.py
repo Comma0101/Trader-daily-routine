@@ -15,6 +15,7 @@ from llm import (
     generate_gemini_summary,
     load_gemini_config,
 )
+from schema import build_structured_report
 from summary import (
     build_summary_facts,
     maybe_generate_llm_summary,
@@ -112,6 +113,14 @@ class SummaryFactBuilderRegressionTests(unittest.TestCase):
                         "delta_weight_5d": 0.07,
                         "estimated_notional_change_usd_1d": 3_000_000_000.0,
                         "estimated_notional_change_usd_5d": 7_000_000_000.0,
+                        "decomposition_5d": {
+                            "signal_effect": 0.05,
+                            "vol_target_effect": 0.01,
+                            "allocation_effect": 0.005,
+                            "leverage_cap_effect": 0.005,
+                            "total": 0.07,
+                            "flow_type": "short_cover_to_long",
+                        },
                     }
                 },
                 "top_notional_increase_1d": [
@@ -123,6 +132,19 @@ class SummaryFactBuilderRegressionTests(unittest.TestCase):
                     }
                 ],
                 "top_notional_decrease_1d": [],
+                "aggregate_decomposition_5d": {
+                    "signal_effect_weight": 0.05,
+                    "vol_target_effect_weight": 0.01,
+                    "allocation_effect_weight": 0.005,
+                    "leverage_cap_effect_weight": 0.005,
+                    "signal_effect_usd": 5_000_000_000.0,
+                    "vol_target_effect_usd": 1_000_000_000.0,
+                    "allocation_effect_usd": 500_000_000.0,
+                    "leverage_cap_effect_usd": 500_000_000.0,
+                    "flow_type_counts": {
+                        "short_cover_to_long": 1,
+                    },
+                },
             },
             data_context={
                 "mode": "live",
@@ -298,8 +320,14 @@ class SummaryFactBuilderRegressionTests(unittest.TestCase):
         self.assertIn("investment_overview", facts)
         self.assertIn("live", facts["data_used"]["price_mode"].lower())
         self.assertIn("weight", facts["calculation_method"]["flow"])
+        self.assertIn("Driver decomposition", facts["calculation_method"]["flow"])
         self.assertIn("Model-implied", facts["flow"]["estimation_label"])
         self.assertEqual(facts["capital"]["aum_basis"]["source"], "user_assumption")
+        self.assertIn("aggregate_decomposition_5d", facts["drivers"])
+        self.assertEqual(
+            facts["drivers"]["aggregate_decomposition_5d"]["flow_type_counts"]["short_cover_to_long"],
+            1,
+        )
         self.assertGreaterEqual(len(facts["suggestions"]), 1)
 
     def test_investment_overview_snapshot_contains_aum_and_deployment(self):
@@ -321,6 +349,45 @@ class SummaryFactBuilderRegressionTests(unittest.TestCase):
         self.assertIsInstance(overview["all_market_flows"], list)
         symbols = [f["symbol"] for f in overview["all_market_flows"]]
         self.assertIn("ES", symbols)
+        es = next(item for item in overview["all_market_flows"] if item["symbol"] == "ES")
+        self.assertEqual(es["decomposition_5d"]["flow_type"], "short_cover_to_long")
+        self.assertIn("aggregate_decomposition_5d", overview)
+        self.assertAlmostEqual(overview["aggregate_decomposition_5d"]["signal_effect_weight"], 0.05)
+
+    def test_build_summary_facts_carries_tactical_equity_snapshot(self):
+        facts = build_summary_facts(
+            portfolio_result=self.portfolio_result,
+            universe=self.universe,
+            flips_by_market=self.flips_by_market,
+            tactical_equity={
+                "available": True,
+                "scenario_reference": {
+                    "flat": {"label": "flat", "total_estimated_notional_change_usd": 0.0, "total_delta_weight": 0.0},
+                    "up_2pct": {"label": "+2%", "total_estimated_notional_change_usd": 1_500_000_000.0, "total_delta_weight": 0.015},
+                    "down_2pct": {"label": "-2%", "total_estimated_notional_change_usd": -2_200_000_000.0, "total_delta_weight": -0.022},
+                },
+            },
+        )
+
+        self.assertTrue(facts["tactical_equity"]["available"])
+        self.assertIn("tactical_equity", facts["drivers"])
+        self.assertIn("Tactical ES/NQ sleeve", facts["conclusion"]["details"][0] + " ".join(facts["conclusion"]["details"]))
+
+    def test_build_summary_facts_carries_goldman_calibration_snapshot(self):
+        facts = build_summary_facts(
+            portfolio_result=self.portfolio_result,
+            universe=self.universe,
+            flips_by_market=self.flips_by_market,
+            goldman_calibration={
+                "available": True,
+                "headline": "Goldman calibration best fit: fast | score 50.0",
+                "recommendation": "Calibration materially improved fit, but magnitude error is still too wide for dealer-desk quality.",
+            },
+        )
+
+        self.assertTrue(facts["goldman_calibration"]["available"])
+        self.assertIn("goldman_calibration", facts["drivers"])
+        self.assertIn("Goldman calibration best fit", " ".join(facts["conclusion"]["details"]))
 
 
 class SummaryRenderingRegressionTests(unittest.TestCase):
@@ -399,6 +466,13 @@ class SummaryRenderingRegressionTests(unittest.TestCase):
                     {"symbol": "ES", "market": "S&P 500", "estimated_notional_change_usd_5d": 7000000000.0, "delta_weight_5d": 0.07}
                 ],
                 "top_notional_decrease_5d": [],
+                "aggregate_decomposition_5d": {
+                    "signal_effect_usd": 5000000000.0,
+                    "vol_target_effect_usd": 1000000000.0,
+                    "allocation_effect_usd": 500000000.0,
+                    "leverage_cap_effect_usd": 500000000.0,
+                    "flow_type_counts": {"short_cover_to_long": 1},
+                },
             },
             "capital": {
                 "aum_basis": {
@@ -499,6 +573,7 @@ class SummaryRenderingRegressionTests(unittest.TestCase):
         self.assertIn("Suggestions:", output)
         self.assertIn("notional", output.lower())
         self.assertIn("CTA AUM assumption", output)
+        self.assertIn("driver split", output.lower())
 
     def test_render_terminal_summary_mentions_data_method_capital_and_suggestion_context(self):
         output = render_terminal_summary(self.facts)
@@ -508,6 +583,30 @@ class SummaryRenderingRegressionTests(unittest.TestCase):
         self.assertIn("Capital:", output)
         self.assertIn("Conclusion:", output)
         self.assertIn("Suggestion:", output)
+        self.assertIn("driver split", output.lower())
+
+
+class StructuredReportFlowSchemaTests(unittest.TestCase):
+    def test_structured_report_surfaces_flow_driver_decomposition(self):
+        facts = SummaryFactBuilderRegressionTests()
+        facts.setUp()
+        built = facts._build_facts()
+
+        report = build_structured_report(built)
+
+        self.assertIn("flow_summary", report)
+        self.assertIn("tactical_equity_flow", report)
+        self.assertIn("goldman_calibration", report)
+        self.assertAlmostEqual(
+            report["flow_summary"]["aggregate_decomposition_5d"]["signal_effect_weight"],
+            0.05,
+        )
+        self.assertEqual(
+            report["flow_summary"]["aggregate_decomposition_5d"]["flow_type_counts"]["short_cover_to_long"],
+            1,
+        )
+        self.assertEqual(report["market_table"][0]["flow_type_5d"], "short_cover_to_long")
+        self.assertIn("driver_decomposition_5d", report["market_table"][0])
 
 
 class SummaryLlmFallbackRegressionTests(unittest.TestCase):
@@ -704,12 +803,16 @@ class SummaryLlmFallbackRegressionTests(unittest.TestCase):
             "- Data mode: live nowcast\n"
         )
 
-        with mock.patch("summary.generate_gemini_summary", return_value=note):
-            output = maybe_generate_llm_summary(
-                facts,
-                use_llm=True,
-                output_format="markdown",
-            )
+        with mock.patch(
+            "summary.load_gemini_config",
+            return_value={"model": "gemini-3-pro-preview", "fallback_model": "gemini-2.5-flash"},
+        ):
+            with mock.patch("summary.generate_gemini_summary", return_value=note):
+                output = maybe_generate_llm_summary(
+                    facts,
+                    use_llm=True,
+                    output_format="markdown",
+                )
 
         self.assertEqual(output, note.strip())
 
@@ -734,12 +837,16 @@ class SummaryLlmFallbackRegressionTests(unittest.TestCase):
             "- SG validation unavailable\n"
         )
 
-        with mock.patch("summary.generate_gemini_summary", return_value=note):
-            output = maybe_generate_llm_summary(
-                facts,
-                use_llm=True,
-                output_format="markdown",
-            )
+        with mock.patch(
+            "summary.load_gemini_config",
+            return_value={"model": "gemini-3-pro-preview", "fallback_model": "gemini-2.5-flash"},
+        ):
+            with mock.patch("summary.generate_gemini_summary", return_value=note):
+                output = maybe_generate_llm_summary(
+                    facts,
+                    use_llm=True,
+                    output_format="markdown",
+                )
 
         self.assertEqual(output, note.strip())
 

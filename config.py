@@ -302,10 +302,15 @@ VOL_PARAMS = {
 
 # ---------------------------------------------------------------------------
 # Portfolio construction
+#
+# Weights are recomputed on every bar (daily). There is no monthly gate —
+# signal changes, vol-scalar drift, and sector-membership shifts all flow
+# through immediately. This matches the continuous-rebalance assumption
+# used by most CTA proxy models (SG Trend Indicator, KMLM, etc.).
 # ---------------------------------------------------------------------------
 PORTFOLIO_PARAMS = {
     "sector_weight_method": "equal_risk",  # equal risk budget across sectors
-    "rebalance_freq": "M",                 # monthly rebalancing
+    "rebalance_freq": "D",                 # daily (continuous) rebalancing
     "max_leverage": 5.0,                   # hard cap on gross leverage (legacy alias)
     "max_gross_multiple": 5.0,             # explicit name for headroom cap
 }
@@ -365,6 +370,61 @@ BENCHMARK_ETFS = {
     "DBMF": {"name": "iMGP DBi Managed Futures Strategy ETF",            "approach": "SG CTA Index replication"},
     "KMLM": {"name": "KraneShares Mount Lucas Managed Futures Index ETF", "approach": "rules-based trend following"},
     "CTA":  {"name": "Simplify Managed Futures Strategy ETF",             "approach": "fast trend following"},
+}
+
+# ---------------------------------------------------------------------------
+# Tactical equity CTA flow sleeve
+#
+# Separate from the broad SG-style proxy:
+# - focus on ES/NQ
+# - multi-horizon signal stack
+# - market-specific AUM allocation
+# - tape scenarios similar to dealer CTA trigger notes
+# ---------------------------------------------------------------------------
+TACTICAL_EQUITY_PARAMS = {
+    "markets": ("ES", "NQ"),
+    "horizons": (20, 60, 125, 250, 500),
+    "horizon_weights": {
+        20: 0.20,
+        60: 0.20,
+        125: 0.20,
+        250: 0.20,
+        500: 0.20,
+    },
+    "market_allocations": {
+        "ES": 0.70,
+        "NQ": 0.30,
+    },
+    "signal_mode": "distance_scaled",
+    "signal_spans": {
+        20: 0.06,
+        60: 0.08,
+        125: 0.10,
+        250: 0.12,
+        500: 0.15,
+    },
+    "scenario_moves": (-0.05, -0.02, -0.01, 0.0, 0.01, 0.02, 0.05),
+    "max_gross_leverage": 2.0,
+}
+
+# ---------------------------------------------------------------------------
+# Goldman note calibration search
+#
+# Coarse search only. This is intended to answer "which tactical ES/NQ sleeve
+# parameters best fit public Goldman CTA note snapshots?" It is not a
+# production optimizer.
+# ---------------------------------------------------------------------------
+GOLDMAN_CALIBRATION_GRID = {
+    "horizon_profiles": {
+        "balanced": {20: 0.20, 60: 0.20, 125: 0.20, 250: 0.20, 500: 0.20},
+        "fast": {20: 0.35, 60: 0.25, 125: 0.20, 250: 0.10, 500: 0.10},
+        "medium": {20: 0.15, 60: 0.30, 125: 0.30, 250: 0.15, 500: 0.10},
+        "slow": {20: 0.10, 60: 0.15, 125: 0.25, 250: 0.25, 500: 0.25},
+    },
+    "es_allocations": (0.60, 0.70, 0.80),
+    "max_gross_leverage": (1.5, 2.0, 2.5),
+    "signal_span_scales": (0.75, 1.0, 1.25, 1.5),
+    "top_k": 5,
 }
 
 # ---------------------------------------------------------------------------

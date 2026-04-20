@@ -125,6 +125,77 @@ class FlowEstimatorTests(unittest.TestCase):
         self.assertIn("Model-implied", flow["estimation_label"])
         self.assertIn("not observed flow", flow["estimation_label"])
 
+    def test_estimate_uses_prior_close_when_current_weight_matches_last_history_row(self):
+        current_weights = {"ES": 0.15}
+        flow = FlowEstimator(self.universe).estimate(
+            current_weights=current_weights,
+            historical_weights=self.weight_history[["ES"]],
+            current_prices={"ES": 5000.0},
+            assumed_cta_aum_usd=1_000_000.0,
+        )
+
+        es = flow["markets"]["ES"]
+        self.assertAlmostEqual(es["delta_weight_1d"], 0.01)
+        self.assertAlmostEqual(es["delta_weight_5d"], 0.05)
+        self.assertAlmostEqual(es["estimated_notional_change_usd_1d"], 10_000.0)
+        self.assertAlmostEqual(es["estimated_notional_change_usd_5d"], 50_000.0)
+
+    def test_estimate_includes_driver_decomposition_when_components_are_supplied(self):
+        components = {
+            "signals": pd.DataFrame(
+                {"ES": [-1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+                index=pd.date_range("2026-04-08", periods=6, freq="D"),
+            ),
+            "vol_scalars": pd.DataFrame(
+                {"ES": [1.0, 1.0, 1.0, 1.1, 1.1, 1.2]},
+                index=pd.date_range("2026-04-08", periods=6, freq="D"),
+            ),
+            "alloc_budgets": pd.DataFrame(
+                {"ES": [0.10, 0.10, 0.10, 0.12, 0.12, 0.12]},
+                index=pd.date_range("2026-04-08", periods=6, freq="D"),
+            ),
+            "cap_factors": pd.Series(
+                [1.0, 1.0, 1.0, 1.0, 0.9, 0.8],
+                index=pd.date_range("2026-04-08", periods=6, freq="D"),
+            ),
+        }
+
+        flow = FlowEstimator(self.universe).estimate(
+            current_weights={"ES": 0.1152},
+            historical_weights=pd.DataFrame(
+                {"ES": [-0.10, 0.10, 0.10, 0.132, 0.1188, 0.1152]},
+                index=pd.date_range("2026-04-08", periods=6, freq="D"),
+            ),
+            current_prices={"ES": 5000.0},
+            assumed_cta_aum_usd=1_000_000.0,
+            components=components,
+        )
+
+        decomp_1d = flow["markets"]["ES"]["decomposition_1d"]
+        decomp_5d = flow["markets"]["ES"]["decomposition_5d"]
+        agg_5d = flow["aggregate_decomposition_5d"]
+
+        self.assertAlmostEqual(decomp_1d["signal_effect"], 0.0)
+        self.assertAlmostEqual(decomp_1d["vol_target_effect"], 0.0108)
+        self.assertAlmostEqual(decomp_1d["allocation_effect"], 0.0)
+        self.assertAlmostEqual(decomp_1d["leverage_cap_effect"], -0.0144)
+        self.assertAlmostEqual(decomp_1d["total"], -0.0036)
+        self.assertEqual(decomp_1d["flow_type"], "rebalance")
+
+        self.assertAlmostEqual(decomp_5d["signal_effect"], 0.2)
+        self.assertAlmostEqual(decomp_5d["vol_target_effect"], 0.02)
+        self.assertAlmostEqual(decomp_5d["allocation_effect"], 0.024)
+        self.assertAlmostEqual(decomp_5d["leverage_cap_effect"], -0.0288)
+        self.assertAlmostEqual(decomp_5d["total"], 0.2152)
+        self.assertEqual(decomp_5d["flow_type"], "short_cover_to_long")
+
+        self.assertAlmostEqual(agg_5d["signal_effect_weight"], 0.2)
+        self.assertAlmostEqual(agg_5d["vol_target_effect_weight"], 0.02)
+        self.assertAlmostEqual(agg_5d["allocation_effect_weight"], 0.024)
+        self.assertAlmostEqual(agg_5d["leverage_cap_effect_weight"], -0.0288)
+        self.assertAlmostEqual(agg_5d["signal_effect_usd"], 200_000.0)
+        self.assertEqual(agg_5d["flow_type_counts"]["short_cover_to_long"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

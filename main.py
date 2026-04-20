@@ -25,6 +25,7 @@ from data.benchmarks import BenchmarkData
 from flow_estimator import FlowEstimator
 from model.trend import TrendModel
 from model.portfolio import PortfolioConstructor
+from model.tactical_equity import TacticalEquityFlowModel
 from report import print_full_report
 from schema import build_structured_report
 from summary import (
@@ -36,6 +37,8 @@ from summary import (
 from validation.position_validation import PositionValidator
 from validation.return_validation import ReturnValidator
 from validation.signal_validation import SignalValidator
+from validation.goldman_benchmark import GoldmanBenchmarkValidator
+from validation.goldman_calibration import GoldmanCalibrationSearch
 
 
 def main():
@@ -131,7 +134,8 @@ def main():
     for sym in portfolio["signal_details"]:
         flips_by_market[sym] = tm.detect_flips(prices[sym], lookback_days=5)
 
-    weight_history = pc.historical_weights(daily_prices, returns)
+    history = pc.historical_components(daily_prices, returns)
+    weight_history = history["weights"]
     flow_estimate = FlowEstimator(universe=universe).estimate(
         current_weights=portfolio.get("weights", {}),
         historical_weights=weight_history,
@@ -140,9 +144,25 @@ def main():
             for sym, details in portfolio.get("signal_details", {}).items()
         },
         assumed_cta_aum_usd=args.assumed_cta_aum,
+        components=history,
     )
     capital_estimate = CapitalEstimator().estimate(
         portfolio,
+        assumed_cta_aum_usd=args.assumed_cta_aum,
+    )
+    tactical_equity = TacticalEquityFlowModel(universe=universe).build(
+        prices=daily_prices,
+        returns=returns,
+        assumed_cta_aum_usd=args.assumed_cta_aum,
+    )
+    goldman_benchmark = GoldmanBenchmarkValidator().validate(
+        prices=daily_prices,
+        returns=returns,
+        assumed_cta_aum_usd=args.assumed_cta_aum,
+    )
+    goldman_calibration = GoldmanCalibrationSearch().fit(
+        prices=daily_prices,
+        returns=returns,
         assumed_cta_aum_usd=args.assumed_cta_aum,
     )
 
@@ -192,6 +212,9 @@ def main():
             as_of=report_context.get("as_of"),
             data_context=report_context,
             historical_crowding_ratios=historical_crowding_ratios,
+            tactical_equity=tactical_equity,
+            goldman_benchmark=goldman_benchmark,
+            goldman_calibration=goldman_calibration,
         )
         if args.llm_summary:
             summary_text = maybe_generate_llm_summary(
@@ -236,6 +259,9 @@ def main():
         report_context=report_context,
         flow_estimate=flow_estimate,
         capital_estimate=capital_estimate,
+        tactical_equity=tactical_equity,
+        goldman_benchmark=goldman_benchmark,
+        goldman_calibration=goldman_calibration,
         etf_returns_df=etf_returns_df,
         signal_validation=signal_validation,
         position_validation=position_validation,

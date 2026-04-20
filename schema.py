@@ -50,6 +50,10 @@ def build_structured_report(facts: dict) -> dict:
             "headroom_formula": facts.get("capital", {}).get("formula"),
         },
         "market_table": market_table,
+        "flow_summary": _build_flow_summary(facts),
+        "tactical_equity_flow": facts.get("tactical_equity", {}),
+        "goldman_benchmark": facts.get("goldman_benchmark", {}),
+        "goldman_calibration": facts.get("goldman_calibration", {}),
         "sector_rotation": sector_rotation,
         "crowding": {
             "ratio": crowding.get("crowded_ratio"),
@@ -98,10 +102,28 @@ def _build_market_table(facts):
             "distance_bucket": risk.get("distance_bucket"),
             "notional_change_5d_usd": mf.get("estimated_notional_change_usd_5d"),
             "contract_equivalent_5d": mf.get("estimated_contract_equivalent_5d"),
+            "flow_type_5d": (mf.get("decomposition_5d") or {}).get("flow_type"),
+            "driver_decomposition_5d": mf.get("decomposition_5d"),
             "days_in_position": conv.get("days_in_position"),
         })
 
     return rows
+
+
+def _build_flow_summary(facts):
+    flow = facts.get("flow", {})
+    return {
+        "estimation_label": flow.get("estimation_label"),
+        "assumed_cta_aum_usd": flow.get("assumed_cta_aum_usd"),
+        "top_notional_increase_1d": flow.get("top_notional_increase_1d", []),
+        "top_notional_decrease_1d": flow.get("top_notional_decrease_1d", []),
+        "top_notional_increase_5d": flow.get("top_notional_increase_5d", []),
+        "top_notional_decrease_5d": flow.get("top_notional_decrease_5d", []),
+        "sector_flows_1d": flow.get("sector_flows_1d", {}),
+        "sector_flows_5d": flow.get("sector_flows_5d", {}),
+        "aggregate_decomposition_1d": flow.get("aggregate_decomposition_1d"),
+        "aggregate_decomposition_5d": flow.get("aggregate_decomposition_5d"),
+    }
 
 
 def _build_sector_rotation(overview):

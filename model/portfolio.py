@@ -5,11 +5,11 @@ Implements:
   - Equal risk budget across sectors (each sector gets 1/N of risk)
   - Within each sector, equal risk per market
   - Vol-targeted position sizing per market
-  - Monthly rebalance flag
+  - Continuous (daily) rebalance
   - Gross leverage cap
 
 Mirrors SG Trend Indicator methodology: equal-risk sector weights,
-vol targeting, monthly rebalance.
+vol targeting, continuous (daily) rebalance.
 """
 
 import pandas as pd
@@ -150,12 +150,28 @@ class PortfolioConstructor:
             "net_exposure": net,
         }
 
-    def historical_weights(
+    def historical_components(
         self,
         prices: dict[str, pd.Series],
         returns: dict[str, pd.Series],
-    ) -> pd.DataFrame:
-        """Build a daily weight history from signal and vol histories."""
+    ) -> dict:
+        """Build daily weight history with per-component breakdowns.
+
+        Returns dict with:
+            weights:      DataFrame (dates × markets) — final portfolio weights
+            signals:      DataFrame (dates × markets) — raw composite signal
+            vol_scalars:  DataFrame (dates × markets) — vol-target scalar
+            alloc_budgets: DataFrame (dates × markets) — allocation budget per market
+            cap_factors:  Series (dates) — leverage-cap scaling factor (1.0 = not binding)
+        """
+        empty = {
+            "weights": pd.DataFrame(),
+            "signals": pd.DataFrame(),
+            "vol_scalars": pd.DataFrame(),
+            "alloc_budgets": pd.DataFrame(),
+            "cap_factors": pd.Series(dtype=float),
+        }
+
         histories = {}
         for sym, price_series in prices.items():
             if sym not in returns or returns[sym].empty:
@@ -173,13 +189,21 @@ class PortfolioConstructor:
                 histories[sym] = history
 
         if not histories:
-            return pd.DataFrame()
+            return empty
 
         all_dates = sorted({date for history in histories.values() for date in history.index})
-        weight_frame = pd.DataFrame(0.0, index=pd.DatetimeIndex(all_dates), columns=sorted(histories))
+        columns = sorted(histories)
+        idx = pd.DatetimeIndex(all_dates)
+
+        weight_frame = pd.DataFrame(0.0, index=idx, columns=columns)
+        signal_frame = pd.DataFrame(0.0, index=idx, columns=columns)
+        vol_scalar_frame = pd.DataFrame(0.0, index=idx, columns=columns)
+        alloc_budget_frame = pd.DataFrame(0.0, index=idx, columns=columns)
+        cap_factors = pd.Series(1.0, index=idx)
+
         sector_map = self.sector_map()
 
-        for date in weight_frame.index:
+        for date in idx:
             active_sectors = []
             sector_symbols = {}
             for sector in self.sectors:
@@ -199,15 +223,35 @@ class PortfolioConstructor:
                 per_market = sector_budget / len(sector_symbols[sector])
                 for sym in sector_symbols[sector]:
                     point = histories[sym].loc[date]
-                    weight_frame.at[date, sym] = (
-                        per_market * float(point["signal"]) * float(point["vol_scalar"])
-                    )
+                    sig = float(point["signal"])
+                    vol_s = float(point["vol_scalar"])
+
+                    signal_frame.at[date, sym] = sig
+                    vol_scalar_frame.at[date, sym] = vol_s
+                    alloc_budget_frame.at[date, sym] = per_market
+                    weight_frame.at[date, sym] = per_market * sig * vol_s
 
             gross = weight_frame.loc[date].abs().sum()
             if gross > self.max_leverage and gross > 0:
-                weight_frame.loc[date] *= self.max_leverage / gross
+                cap = self.max_leverage / gross
+                weight_frame.loc[date] *= cap
+                cap_factors.at[date] = cap
 
-        return weight_frame
+        return {
+            "weights": weight_frame,
+            "signals": signal_frame,
+            "vol_scalars": vol_scalar_frame,
+            "alloc_budgets": alloc_budget_frame,
+            "cap_factors": cap_factors,
+        }
+
+    def historical_weights(
+        self,
+        prices: dict[str, pd.Series],
+        returns: dict[str, pd.Series],
+    ) -> pd.DataFrame:
+        """Build a daily weight history from signal and vol histories."""
+        return self.historical_components(prices, returns)["weights"]
 
     def backtest_returns(
         self,
